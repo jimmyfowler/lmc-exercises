@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lmc-exercises"
+version = "0.1.0"
+description = "Dependencies for Learning & Model-based Control exercise notebooks"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "scipy>=1.10",
+    "jax>=0.4.26",
+    "equinox>=0.11.0",
+    "cvxpy>=1.4.0",
+    "ipywidgets>=8.0",
+    "jupyterlab>=4.0",
+    "ipykernel>=6.25",
+    "ipython>=8.12",
+]
+
+[project.optional-dependencies]
+# GPU (pick the extra that matches your CUDA version; see https://jax.readthedocs.io/en/latest/installation.html)
+cuda12 = ["jax[cuda12]"]
+# hj_reachability_basics.ipynb — install only if you use that notebook
+reachability = ["hj-reachability"]
+# scripts/export_student_notebooks.py
+dev = ["nbformat>=5.7"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lmc_exercises*"]
