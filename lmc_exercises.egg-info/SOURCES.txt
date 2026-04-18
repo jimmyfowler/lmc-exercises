@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+lmc_exercises.egg-info/PKG-INFO
+lmc_exercises.egg-info/SOURCES.txt
+lmc_exercises.egg-info/dependency_links.txt
+lmc_exercises.egg-info/requires.txt
+lmc_exercises.egg-info/top_level.txt
