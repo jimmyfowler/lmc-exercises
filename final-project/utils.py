@@ -1,13 +1,94 @@
-import numpy as np
+import functools
+import os
+from typing import Callable, List
+
+import dynamaxsys
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
-import dynamaxsys
-import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from typing import Callable, List
+import matplotlib.pyplot as plt
+import numpy as np
 from IPython.display import HTML, display
-import os
+
+
+def PD_controller(
+    state: jnp.ndarray, target: jnp.ndarray, gains: jnp.ndarray, limits: jnp.ndarray
+):
+    """PD controller for the rocket landing problem
+    Args:
+        state: Current state of the rocket
+        target: Target state of the rocket
+        gains: Gains for the PD controller
+        limits: Limits for the control inputs
+    Returns:
+        Control input to the rocket
+    """
+    p_x, p_z, theta, v_x, v_z, omega = state
+    p_x_target, p_z_target, theta_target, v_x_target, v_z_target, omega_target = target
+    Kp_x, Kd_x, Kp_z, Kd_z, Kp_theta, Kd_theta = gains
+    lower_bounds, upper_bounds = limits
+    T_x_min, T_z_min, T_theta_min = lower_bounds
+    T_x_max, T_z_max, T_theta_max = upper_bounds
+
+    # TODO: Implement the PD controller here
+    ###### add your code here
+    T_x = -Kp_x * (p_x - p_x_target) - Kd_x * (v_x - v_x_target)
+
+    T_z = -Kp_z * (p_z - p_z_target) - Kd_z * (v_z - v_z_target)
+    T_theta = -Kp_theta * (theta - theta_target) - Kd_theta * (omega - omega_target)
+
+    # Control saturation (thrust limits)
+    T_x = jnp.clip(T_x, T_x_min, T_x_max)
+    T_z = jnp.clip(T_z, T_z_min, T_z_max)
+    T_theta = jnp.clip(T_theta, T_theta_min, T_theta_max)
+
+    ###### end of add your code here
+
+    return jnp.array([T_x, T_z, T_theta])
+
+
+def initial_guess_closed_loop(
+    rocket_dt: dynamaxsys.Dynamics,
+    initial_state: jnp.ndarray,
+    n_steps: int,
+    controller: Callable,
+):
+    """
+    Generate an initial guess for the trajectory using a closed-loop controller.
+    Args:
+        initial_state: Initial state of the rocket
+        target: Target state of the rocket
+        controller: Closed-loop controller function
+        limits: Limits for the control inputs
+    Returns:
+
+    """
+
+    # set up the PD controller. Use functools.partial to fix the target, gains, and limits
+    controller = functools.partial(
+        PD_controller, target=target_state, gains=gains, limits=limits
+    )
+    return closed_loop_sim(rocket_dt, initial_state, controller, n_steps)
+
+
+def initial_guess_straight_line(
+    x0: jnp.ndarray,
+    xf: jnp.ndarray,
+    n_steps: int,
+) -> jnp.ndarray:
+    """
+    Generate a straight-line initial guess for the rocket trajectory
+    between the initial and final states.
+    Args:
+        x0: Initial state of the rocket (shape: [state_dim,]).
+        xf: Final state of the rocket (shape: [state_dim,]).
+        n_steps: Number of time steps in the trajectory.
+
+    Returns:
+        A straight-line trajectory guess (shape: [n_steps, state_dim]).
+    """
+    return jnp.linspace(x0, xf, n_steps)
 
 
 # helper functions for simulation
