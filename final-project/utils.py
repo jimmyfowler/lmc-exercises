@@ -31,8 +31,7 @@ def PD_controller(
     T_x_min, T_z_min, T_theta_min = lower_bounds
     T_x_max, T_z_max, T_theta_max = upper_bounds
 
-    # TODO: Implement the PD controller here
-    ###### add your code here
+
     T_x = -Kp_x * (p_x - p_x_target) - Kd_x * (v_x - v_x_target)
 
     T_z = -Kp_z * (p_z - p_z_target) - Kd_z * (v_z - v_z_target)
@@ -42,8 +41,6 @@ def PD_controller(
     T_x = jnp.clip(T_x, T_x_min, T_x_max)
     T_z = jnp.clip(T_z, T_z_min, T_z_max)
     T_theta = jnp.clip(T_theta, T_theta_min, T_theta_max)
-
-    ###### end of add your code here
 
     return jnp.array([T_x, T_z, T_theta])
 
@@ -91,25 +88,26 @@ def initial_guess_straight_line(
     return jnp.linspace(x0, xf, n_steps)
 
 
-# helper functions for simulation
 @eqx.filter_jit
 def closed_loop_sim(
     dynamics_discrete: dynamaxsys.Dynamics,
     initial_state: jnp.ndarray,
     controller: Callable[[jnp.ndarray], jnp.ndarray],
-    sim_steps: int,
+    n_steps: int,
+    disturbances: jnp.ndarray | None = None,  # size (sim_steps, state_dim)
 ):
     """Simulate the closed-loop system given a closed-loop controller using jax.lax.scan"""
 
-    def step_fn(state, _):
+    if disturbances is None:
+        disturbances = jnp.zeros((n_steps, initial_state.shape[0]))
+        
+    def step_fn(state, disturbance):
         control = controller(state)
-        next_state = dynamics_discrete(state, control)
+        next_state = dynamics_discrete(state, control, disturbance)
         return next_state, (next_state, control)
 
-    # Dummy scan inputs as we need sim_steps steps
-    dummy_inputs = jnp.arange(sim_steps)
     final_state, (all_states, all_controls) = jax.lax.scan(
-        step_fn, initial_state, dummy_inputs
+        step_fn, initial_state, disturbances
     )
 
     # Include the initial state
@@ -122,15 +120,22 @@ def open_loop_sim(
     dynamics_discrete: dynamaxsys.Dynamics,
     initial_state: jnp.ndarray,
     controls: jnp.ndarray,
+    disturbances: jnp.ndarray | None = None,
 ):
     """Simulate the open-loop system given a dynamics model using jax.lax.scan"""
 
-    def step_fn(state, control):
-        next_state = dynamics_discrete(state, control)
+    if disturbances is None:
+        disturbances = jnp.zeros((controls.shape[0], initial_state.shape[0]))
+
+    def step_fn(state, ctrl_disturb):
+        control, disturbance = ctrl_disturb
+        next_state = dynamics_discrete(state, control, disturbance)
         return next_state, next_state
 
     # Run scan
-    final_state, all_next_states = jax.lax.scan(step_fn, initial_state, controls)
+    final_state, all_next_states = jax.lax.scan(
+        step_fn, initial_state, (controls, disturbances)
+    )
 
     # Concatenate initial state at the front
     states = jnp.concatenate([initial_state[None], all_next_states], axis=0)
@@ -138,7 +143,7 @@ def open_loop_sim(
 
 
 # helper functions for plotting
-def plot_rocket_trajectory(states, controls, lower, upper):
+def plot_rocket_trajectory(states, controls, lower, upper, title = None, theta_limit = None):
     """
     Plots rocket state and control trajectories.
 
@@ -154,6 +159,9 @@ def plot_rocket_trajectory(states, controls, lower, upper):
     else:
         alpha = 0.4
     fig, axs = plt.subplots(2, 2, figsize=(12, 6), sharex=True)
+    
+    if title is not None:
+        fig.suptitle(title)
 
     # Position
     axs[0, 0].plot(states[..., :, 0].T, color="C0", alpha=alpha)
@@ -166,9 +174,14 @@ def plot_rocket_trajectory(states, controls, lower, upper):
     axs[0, 0].grid(True)
 
     # Angle
-    axs[1, 0].plot(states[..., :, 2].T, color="C0", alpha=alpha)
+    axs[1, 0].plot(states[..., :, 2].T, color="C0", alpha=alpha, label="theta")
     axs[1, 0].set_ylabel("Angle (rad)")
-    axs[1, 0].legend(["theta"])
+    if theta_limit is not None:
+        axs[1, 0].hlines(theta_limit, 0, n_steps, color="r", linestyle="--", label="theta limit")
+        handles, labels = axs[1, 0].get_legend_handles_labels()
+        axs[1, 0].legend([handles[0], handles[-1]], [labels[0], labels[-1]])
+    else:
+        axs[1, 0].legend(["theta"])
     axs[1, 0].grid(True)
 
     # Velocities

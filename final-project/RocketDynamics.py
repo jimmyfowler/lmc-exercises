@@ -19,8 +19,8 @@ class RocketDynamics(dynamaxsys.Dynamics):
         def rocket_ode(
             states: jnp.ndarray,
             controls: jnp.ndarray,
-            disturbance: jnp.ndarray = None,  # need to provide disturbance for the dynamics class, but not used in this notebook
-            time: float = 0.0,  # need to provide time for the dynamics class, but not used in this notebook
+            disturbance: jnp.ndarray = None,
+            time: float = 0.0,  # need to provide time for the dynamics class, but not used in this implementation
         ):
             mass_thruster = params["mass_thruster"]
             mass_body = params["mass_body"]
@@ -28,8 +28,6 @@ class RocketDynamics(dynamaxsys.Dynamics):
             gravity = params["gravity"]
             _, _, theta, v_x, v_z, omega = states
 
-            # TODO: Implement the continuous time rocket dynamics here
-            ###### add your code here
             # precompute sin and cos for efficiency
             sin_theta = jnp.sin(theta)
             cos_theta = jnp.cos(theta)
@@ -82,7 +80,7 @@ class RocketDynamics(dynamaxsys.Dynamics):
                 ]
             )
 
-            xdot = jnp.concat([q_dot, jnp.linalg.inv(M) @ (Bu - C @ q_dot - g_vec)])
+            xdot = jnp.concat([q_dot, jnp.linalg.inv(M) @ (Bu - C @ q_dot - g_vec)]) + disturbance
 
             return xdot
             ###### end of add your code here
