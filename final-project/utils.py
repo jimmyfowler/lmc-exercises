@@ -177,7 +177,7 @@ def plot_rocket_trajectory(states, controls, lower, upper, title = None, theta_l
     axs[1, 0].plot(states[..., :, 2].T, color="C0", alpha=alpha, label="theta")
     axs[1, 0].set_ylabel("Angle (rad)")
     if theta_limit is not None:
-        axs[1, 0].hlines(theta_limit, 0, n_steps, color="r", linestyle="--", label="theta limit")
+        axs[1, 0].hlines([theta_limit, -theta_limit], 0, n_steps, color="r", linestyle="--", label="theta limit")
         handles, labels = axs[1, 0].get_legend_handles_labels()
         axs[1, 0].legend([handles[0], handles[-1]], [labels[0], labels[-1]])
     else:
@@ -223,78 +223,129 @@ def plot_rocket(
     ax: plt.Axes,
     state: jnp.ndarray,
     control: jnp.ndarray | None = None,
-    color: str = "C0",
+    color: str = "white",
     label: str | None = None,
     rocket_length: float = 2.0,
     thrust_limit: List[float] = [200.0, 300.0, 100.0],
 ):
     """
-    Draw a simple rocket at the specified state, with optional thrust vectors at base and nose.
+    Draw a simplified Apollo-era lunar lander at the specified state, with optional thrust vectors.
 
     Args:
       ax: matplotlib axis
       state: array-like of shape (6,) [x, z, theta, vx, vz, omega]
-      control: array-like of shape (,), assumed [thrust, gimbal_angle] or [Tx, Tz], etc.
-      color: color for rocket body
-      label: optional label for the rocket
-      rocket_length: length of the rocket
+      control: array-like of shape (3,), [Tx, Tz, T_nose]
+      color: color for lander body
+      label: optional label for the lander
+      rocket_length: characteristic length of the lander
     """
+    from matplotlib.patches import Rectangle, Polygon
+    
     x, z, theta = float(state[0]), float(state[1]), float(state[2])
-
-    # Compute end points of rocket body in world frame
-    # Rocket body from (-L/2, 0) to (+L/2, 0) in body frame
-    dx = rocket_length * np.sin(theta)
-    dz = rocket_length * np.cos(theta)
-
-    x_base = x
-    z_base = z
-    x_nose = x + dx
-    z_nose = z + dz
-
-    # Draw main body
-    ax.plot(
-        [x_base, x_nose],
-        [z_base, z_nose],
-        color=color,
-        linewidth=6,
-        solid_capstyle="round",
-        label=label,
-    )
-
-    # Draw thrust vectors at base and nose if control is provided
+    c, s = np.cos(theta), np.sin(theta)
+    
+    # Lander dimensions
+    descent_stage_width = rocket_length * 0.6
+    descent_stage_height = rocket_length * 0.3
+    ascent_stage_width = rocket_length * 0.3
+    ascent_stage_height = rocket_length * 0.4
+    leg_length = rocket_length * 0.6
+    
+    # Define lander geometry in body frame (center at origin)
+    # Descent stage: rectangular platform
+    descent_x = descent_stage_width / 2
+    descent_z = descent_stage_height / 2
+    
+    # Descent stage corners (in body frame, relative to center)
+    descent_corners = np.array([
+        [-descent_x, -descent_z],
+        [descent_x, -descent_z],
+        [descent_x, descent_z],
+        [-descent_x, descent_z],
+    ])
+    
+    # Ascent stage (cabin) on top
+    ascent_x = ascent_stage_width / 2
+    ascent_z = descent_z + ascent_stage_height
+    ascent_corners = np.array([
+        [-ascent_x, descent_z],
+        [ascent_x, descent_z],
+        [ascent_x, ascent_z],
+        [-ascent_x, ascent_z],
+    ])
+    
+    # Landing legs (4 legs extending outward and downward)
+    leg_angle = 45 * np.pi / 180
+    legs = [
+        [descent_x * 0.8, -descent_z],  # base
+        [descent_x * 0.8 + leg_length * np.cos(leg_angle), 
+         -descent_z - leg_length * np.sin(leg_angle)],  # tip
+    ]
+    legs_neg = [
+        [-descent_x * 0.8, -descent_z],
+        [-descent_x * 0.8 - leg_length * np.cos(leg_angle),
+         -descent_z - leg_length * np.sin(leg_angle)],
+    ]
+    
+    # Rotate to world frame
+    def rotate(points):
+        return np.array([[c, -s], [s, c]]) @ points.T
+    
+    descent_world = rotate(descent_corners).T + np.array([x, z])
+    ascent_world = rotate(ascent_corners).T + np.array([x, z])
+    legs_world = rotate(np.array(legs)).T + np.array([x, z])
+    legs_neg_world = rotate(np.array(legs_neg)).T + np.array([x, z])
+    
+    # Draw descent stage
+    descent_poly = Polygon(descent_world, closed=True, edgecolor=color, 
+                          facecolor=color, linewidth=2, alpha=0.9, zorder=10, label=label)
+    ax.add_patch(descent_poly)
+    
+    # Draw ascent stage (cabin)
+    ascent_poly = Polygon(ascent_world, closed=True, edgecolor=color,
+                         facecolor=color, linewidth=2, alpha=0.8, zorder=10)
+    ax.add_patch(ascent_poly)
+    
+    # Draw landing legs
+    ax.plot(legs_world[:, 0], legs_world[:, 1], color=color, linewidth=2.5, zorder=9)
+    ax.plot(legs_neg_world[:, 0], legs_neg_world[:, 1], color=color, linewidth=2.5, zorder=9)
+    
+    # Draw thrust vectors if control is provided
     if control is not None:
         T_base_x, T_base_z, T_nose_x = control
-        thrust_scale = 5.0  # scaling factor for vector length
-
+        thrust_scale = 5.0
+        
+        # Thrust from descent stage (base)
+        thrust_base_world = rotate(np.array([[0, -descent_z]]).T).T[0] + np.array([x, z])
         ax.arrow(
-            x_base,
-            z_base,
+            thrust_base_world[0],
+            thrust_base_world[1],
             thrust_scale * T_base_x / thrust_limit[0],
             thrust_scale * T_base_z / thrust_limit[1],
             head_width=0.06,
             head_length=0.13,
-            fc="crimson",
-            ec="crimson",
-            alpha=0.6,
+            fc="orange",
+            ec="orange",
+            alpha=0.7,
             length_includes_head=True,
             zorder=5,
         )
+        
+        # Thrust from RCS thrusters (nose/top)
+        thrust_nose_world = rotate(np.array([[0, ascent_z - z]]).T).T[0] + np.array([x, z])
         ax.arrow(
-            x_nose,
-            z_nose,
+            thrust_nose_world[0],
+            thrust_nose_world[1],
             thrust_scale * T_nose_x / thrust_limit[2],
             0,
             head_width=0.06,
             head_length=0.13,
-            fc="crimson",
-            ec="crimson",
-            alpha=0.6,
+            fc="orange",
+            ec="orange",
+            alpha=0.7,
             length_includes_head=True,
             zorder=5,
         )
-
-    # Draw ground
-    ax.hlines(0, -3, 3, color="k", linewidth=2, zorder=0)
 
 
 def animate_rocket_trajectory(
@@ -303,7 +354,7 @@ def animate_rocket_trajectory(
     interval=50,
     ax=None,
     save_path=None,
-    color="C0",
+    color="white",
     label=None,
     rocket_length=2.0,
     thrust_limit: List[float] = [200.0, 300.0, 100.0],
@@ -313,7 +364,7 @@ def animate_rocket_trajectory(
     obstacle_alpha: float = 0.4,
 ):
     """
-    Animate rocket trajectory and pose over time, output as HTML if possible.
+    Animate lunar lander trajectory and pose over time, output as HTML if possible.
     Args:
       states: array-like, shape [N,6]
       controls: array-like, shape [N,...], optional
@@ -338,11 +389,20 @@ def animate_rocket_trajectory(
 
     xs = states[:, 0]
     zs = states[:, 1]
+    
+    z_min = zs.min() - 1
+    z_max = zs.max() + 1
 
-    # Draw ground
+    # Set dark background (space)
+    fig.patch.set_facecolor('black')
+    ax.set_facecolor('black')
+    
+    # Draw lunar regolith (grey ground below z=0)
     ground_x = [xs.min() - 1, xs.max() + 1]
-    ground_z = [0, 0]
-    ax.plot(ground_x, ground_z, "k-", linewidth=2)
+    ax.fill_between(ground_x, z_min, 0, color='gray', alpha=0.6, zorder=1)
+    
+    # Draw ground line
+    ax.plot(ground_x, [0, 0], color="lightgray", linewidth=3, zorder=2)
 
     # Draw circular obstacle if specified
     obstacle_artist = None
@@ -360,12 +420,20 @@ def animate_rocket_trajectory(
         ax.add_patch(obstacle_artist)
 
     ax.set_aspect("equal")
-    ax.set_xlabel("x [m]")
-    ax.set_ylabel("z [m]")
-    ax.set_title("Rocket landing trajectory")
+    ax.set_xlabel("x [m]", color="white")
+    ax.set_ylabel("z [m]", color="white")
+    ax.set_title("Lunar Lander Trajectory", color="white", fontsize=14)
+    
+    # Style the axes for dark theme
+    ax.spines['bottom'].set_color('white')
+    ax.spines['left'].set_color('white')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.tick_params(colors='white')
+    ax.grid(True, alpha=0.2, color='white')
 
     # Main trajectory (background)
-    (traj_line,) = ax.plot([], [], "k--", alpha=0.4)
+    (traj_line,) = ax.plot([], [], color="cyan", linestyle="--", alpha=0.4, linewidth=1.5)
 
     rocket_artists = []
 
