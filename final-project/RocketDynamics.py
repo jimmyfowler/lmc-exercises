@@ -19,7 +19,7 @@ class RocketDynamics(dynamaxsys.Dynamics):
         def rocket_ode(
             states: jnp.ndarray,
             controls: jnp.ndarray,
-            disturbance: jnp.ndarray = None,
+            disturbance: jnp.ndarray = jnp.zeros(state_dim),
             time: float = 0.0,  # need to provide time for the dynamics class, but not used in this implementation
         ):
             mass_thruster = params["mass_thruster"]

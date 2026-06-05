@@ -48,8 +48,11 @@ def PD_controller(
 def initial_guess_closed_loop(
     rocket_dt: dynamaxsys.Dynamics,
     initial_state: jnp.ndarray,
-    n_steps: int,
+    target_state: jnp.ndarray,
     controller: Callable,
+    gains: jnp.ndarray,
+    limits: jnp.ndarray,
+    n_steps: int,
 ):
     """
     Generate an initial guess for the trajectory using a closed-loop controller.
@@ -113,6 +116,56 @@ def closed_loop_sim(
     # Include the initial state
     states = jnp.concatenate([initial_state[None], all_states], axis=0)
     return states, all_controls
+
+
+def simulate_closed_loop(
+    dynamics_func,
+    initial_state: np.ndarray,
+    controller,
+    n_steps: int,
+    disturbances: np.ndarray | None = None,
+    has_numpy=False,
+) -> np.ndarray:
+    """
+    Simulate trajectory given initial state and control sequence.
+
+    Args:
+        initial_state: (n,) array of initial state
+        policy: Function(state) -> control
+        n_steps: Number of time steps to simulate
+        dynamics_func: Function(state, control, dt) -> next_state
+        dt: Time step
+    Returns:
+        trajectory: (N+1, n) array of states over time
+    """
+
+    if disturbances is None:
+        if has_numpy:
+            disturbances = np.zeros((n_steps, initial_state.shape[0]))
+        else:
+            disturbances = jnp.zeros((n_steps, initial_state.shape[0]))
+        
+    def _scan_func(state, disturbance):
+        control = controller(state)
+        next_state = dynamics_func(state, control, disturbance)
+        return next_state, (next_state, control)
+
+    def scan(f, init, xs, length=None):
+        if xs is None:
+            xs = [None] * length
+        carry = init
+        ys = []
+        for x in xs:
+            carry, y = f(carry, x)
+            ys.append(y)
+        return carry, np.stack(ys)
+
+    if has_numpy:
+        _, trajectory = scan(_scan_func, initial_state, disturbances, length=n_steps)
+    else:
+        _, trajectory = jax.lax.scan(_scan_func, initial_state, disturbances, length=n_steps)
+    trajectory = jnp.vstack([initial_state, trajectory])
+    return trajectory
 
 
 @eqx.filter_jit
@@ -223,7 +276,7 @@ def plot_rocket(
     ax: plt.Axes,
     state: jnp.ndarray,
     control: jnp.ndarray | None = None,
-    color: str = "white",
+    colors: list = ["white", "gold"],
     label: str | None = None,
     rocket_length: float = 2.0,
     thrust_limit: List[float] = [200.0, 300.0, 100.0],
@@ -246,10 +299,10 @@ def plot_rocket(
     
     # Lander dimensions
     descent_stage_width = rocket_length * 0.6
-    descent_stage_height = rocket_length * 0.3
-    ascent_stage_width = rocket_length * 0.3
-    ascent_stage_height = rocket_length * 0.4
-    leg_length = rocket_length * 0.6
+    descent_stage_height = rocket_length * 0.4
+    ascent_stage_width = rocket_length * 0.45
+    ascent_stage_height = rocket_length * 0.3
+    leg_length = rocket_length * 0.5
     
     # Define lander geometry in body frame (center at origin)
     # Descent stage: rectangular platform
@@ -275,16 +328,16 @@ def plot_rocket(
     ])
     
     # Landing legs (4 legs extending outward and downward)
-    leg_angle = 45 * np.pi / 180
+    leg_angle = 70 * np.pi / 180
     legs = [
-        [descent_x * 0.8, -descent_z],  # base
+        [descent_x * 0.8, descent_z],  # base
         [descent_x * 0.8 + leg_length * np.cos(leg_angle), 
-         -descent_z - leg_length * np.sin(leg_angle)],  # tip
+         descent_z - leg_length * np.sin(leg_angle)],  # tip
     ]
     legs_neg = [
-        [-descent_x * 0.8, -descent_z],
+        [-descent_x * 0.8, descent_z],
         [-descent_x * 0.8 - leg_length * np.cos(leg_angle),
-         -descent_z - leg_length * np.sin(leg_angle)],
+         descent_z - leg_length * np.sin(leg_angle)],
     ]
     
     # Rotate to world frame
@@ -297,18 +350,18 @@ def plot_rocket(
     legs_neg_world = rotate(np.array(legs_neg)).T + np.array([x, z])
     
     # Draw descent stage
-    descent_poly = Polygon(descent_world, closed=True, edgecolor=color, 
-                          facecolor=color, linewidth=2, alpha=0.9, zorder=10, label=label)
+    descent_poly = Polygon(descent_world, closed=True, edgecolor="black", 
+                          facecolor="gold", linewidth=2, zorder=10, label=label)
     ax.add_patch(descent_poly)
     
     # Draw ascent stage (cabin)
-    ascent_poly = Polygon(ascent_world, closed=True, edgecolor=color,
-                         facecolor=color, linewidth=2, alpha=0.8, zorder=10)
+    ascent_poly = Polygon(ascent_world, closed=True, edgecolor="black",
+                         facecolor="white", linewidth=2, zorder=10)
     ax.add_patch(ascent_poly)
     
     # Draw landing legs
-    ax.plot(legs_world[:, 0], legs_world[:, 1], color=color, linewidth=2.5, zorder=9)
-    ax.plot(legs_neg_world[:, 0], legs_neg_world[:, 1], color=color, linewidth=2.5, zorder=9)
+    ax.plot(legs_world[:, 0], legs_world[:, 1], color="gold", linewidth=2.5, zorder=9)
+    ax.plot(legs_neg_world[:, 0], legs_neg_world[:, 1], color="gold", linewidth=2.5, zorder=9)
     
     # Draw thrust vectors if control is provided
     if control is not None:
@@ -383,7 +436,7 @@ def animate_rocket_trajectory(
     N = len(states)
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(6, 8))
+        fig, ax = plt.subplots(figsize=(8, 8))
     else:
         fig = ax.figure
 
@@ -398,8 +451,8 @@ def animate_rocket_trajectory(
     ax.set_facecolor('black')
     
     # Draw lunar regolith (grey ground below z=0)
-    ground_x = [xs.min() - 1, xs.max() + 1]
-    ax.fill_between(ground_x, z_min, 0, color='gray', alpha=0.6, zorder=1)
+    ground_x = [xs.min() - 2, xs.max() + 2]
+    ax.fill_between(ground_x, z_min, 0, color='gray', zorder=1)
     
     # Draw ground line
     ax.plot(ground_x, [0, 0], color="lightgray", linewidth=3, zorder=2)
@@ -457,7 +510,6 @@ def animate_rocket_trajectory(
                 ax,
                 states[i],
                 controls[i],
-                color=color,
                 label=label,
                 rocket_length=rocket_length,
                 thrust_limit=thrust_limit,
@@ -466,7 +518,6 @@ def animate_rocket_trajectory(
             plot_rocket(
                 ax,
                 states[i],
-                color=color,
                 label=label,
                 rocket_length=rocket_length,
                 thrust_limit=thrust_limit,
@@ -502,3 +553,115 @@ def animate_rocket_trajectory(
     else:
         display(HTML(ani.to_jshtml()))
         plt.close(fig)
+
+
+def plot_mpc_sqp_predictions(
+    mpc_states_trajectory: np.ndarray,
+    mpc_controls_trajectory: np.ndarray,
+    sqp_states_predictions: list,
+    sqp_controls_predictions: list,
+    lower_control_limit: np.ndarray,
+    upper_control_limit: np.ndarray,
+    theta_limit: float = 0.25,
+    title: str = "MPC with SQP Predictions",
+):
+    """
+    Plot MPC trajectory with overlaid SQP predictions from each MPC iteration.
+    
+    Args:
+        mpc_states_trajectory: (N+1, 6) actual MPC executed states
+        mpc_controls_trajectory: (N, 3) actual MPC executed controls
+        sqp_states_predictions: list of length N, each element shape (H+1, 6) where H is horizon
+        sqp_controls_predictions: list of length N, each element shape (H, 3)
+        lower_control_limit: (3,) lower control bounds
+        upper_control_limit: (3,) upper control bounds
+        theta_limit: angle constraint magnitude
+        title: plot title
+    """
+    
+    fig, axs = plt.subplots(2, 2, figsize=(14, 8))
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    
+    n_steps = len(mpc_states_trajectory) - 1
+    
+    # Color map for predictions (gradient from early to late MPC steps)
+    colors_prediction = plt.cm.viridis(np.linspace(0, 1, len(sqp_states_predictions)))
+    
+    # ===== Position =====
+    ax = axs[0, 0]
+    
+    # Plot all SQP predictions
+    for i, (pred_states, color) in enumerate(zip(sqp_states_predictions, colors_prediction)):
+        ax.plot(pred_states[:, 0], color=color, linewidth=1.0, alpha=0.5, linestyle='--')
+        ax.plot(pred_states[:, 1], color=color, linewidth=1.0, alpha=0.5, linestyle='--')
+    
+    # Plot actual MPC trajectory (thicker, on top)
+    ax.plot(mpc_states_trajectory[:, 0], color='C0', linewidth=2.5, label='p_x (actual)', zorder=10)
+    ax.plot(mpc_states_trajectory[:, 1], color='C1', linewidth=2.5, label='p_z (actual)', zorder=10)
+    
+    ax.axhline(y=0, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='Ground (z=0)')
+    ax.set_ylabel("Position (m)", fontweight='bold')
+    ax.legend(loc='best', fontsize=9)
+    ax.grid(True, alpha=0.3)
+    
+    # ===== Angle =====
+    ax = axs[1, 0]
+    
+    # Plot all SQP predictions
+    for i, (pred_states, color) in enumerate(zip(sqp_states_predictions, colors_prediction)):
+        ax.plot(pred_states[:, 2], color=color, linewidth=1.0, alpha=0.5, linestyle='--')
+    
+    # Plot actual MPC trajectory
+    ax.plot(mpc_states_trajectory[:, 2], color='C2', linewidth=2.5, label='theta (actual)', zorder=10)
+    
+    # Angle limits
+    ax.hlines([theta_limit, -theta_limit], 0, n_steps, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='theta limit')
+    ax.set_ylabel("Angle (rad)", fontweight='bold')
+    ax.legend(loc='best', fontsize=9)
+    ax.grid(True, alpha=0.3)
+    
+    # ===== Velocities =====
+    ax = axs[0, 1]
+    
+    # Plot all SQP predictions
+    for i, (pred_states, color) in enumerate(zip(sqp_states_predictions, colors_prediction)):
+        ax.plot(pred_states[:, 3], color=color, linewidth=1.0, alpha=0.5, linestyle='--')
+        ax.plot(pred_states[:, 4], color=color, linewidth=1.0, alpha=0.5, linestyle='--')
+    
+    # Plot actual MPC trajectory
+    ax.plot(mpc_states_trajectory[:, 3], color='C0', linewidth=2.5, label='v_x (actual)', zorder=10)
+    ax.plot(mpc_states_trajectory[:, 4], color='C1', linewidth=2.5, label='v_z (actual)', zorder=10)
+    
+    ax.set_ylabel("Velocity (m/s)", fontweight='bold')
+    ax.legend(loc='best', fontsize=9)
+    ax.grid(True, alpha=0.3)
+    
+    # ===== Controls =====
+    ax = axs[1, 1]
+    
+    # Plot all SQP predictions
+    for i, (pred_controls, color) in enumerate(zip(sqp_controls_predictions, colors_prediction)):
+        ax.plot(pred_controls[:, 0], color=color, linewidth=1.0, alpha=0.5, linestyle='--')
+        ax.plot(pred_controls[:, 1], color=color, linewidth=1.0, alpha=0.5, linestyle='--')
+        ax.plot(pred_controls[:, 2], color=color, linewidth=1.0, alpha=0.5, linestyle='--')
+    
+    # Plot actual MPC trajectory
+    ax.plot(mpc_controls_trajectory[:, 0], color='C0', linewidth=2.5, label='T_x (actual)', zorder=10)
+    ax.plot(mpc_controls_trajectory[:, 1], color='C1', linewidth=2.5, label='T_z (actual)', zorder=10)
+    ax.plot(mpc_controls_trajectory[:, 2], color='C2', linewidth=2.5, label='T_nose (actual)', zorder=10)
+    
+    # Control limits
+    ax.hlines(lower_control_limit[0], 0, n_steps, color='C0', linestyle='--', linewidth=1.0, alpha=0.5)
+    ax.hlines(upper_control_limit[0], 0, n_steps, color='C0', linestyle='--', linewidth=1.0, alpha=0.5)
+    ax.hlines(lower_control_limit[1], 0, n_steps, color='C1', linestyle='--', linewidth=1.0, alpha=0.5)
+    ax.hlines(upper_control_limit[1], 0, n_steps, color='C1', linestyle='--', linewidth=1.0, alpha=0.5)
+    ax.hlines(lower_control_limit[2], 0, n_steps, color='C2', linestyle='--', linewidth=1.0, alpha=0.5)
+    ax.hlines(upper_control_limit[2], 0, n_steps, color='C2', linestyle='--', linewidth=1.0, alpha=0.5)
+    
+    ax.set_ylabel("Thrust (N)", fontweight='bold')
+    ax.set_xlabel("Time step", fontweight='bold')
+    ax.legend(loc='best', fontsize=9)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
